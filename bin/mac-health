@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+#
+# mac-health — Check prestazioni Mac (RAM, swap, CPU, disco)
+#
+# Nessuna dipendenza esterna: usa solo tool nativi macOS
+# (awk, sysctl, vm_stat, ps, df, memory_pressure, system_profiler).
+#
+# Exit codes:
+#   0 = sistema in salute
+#   1 = sistema sotto carico (warning)
+#   2 = sistema in pressione critica
+#
+# Licenza: MIT
+
+set -euo pipefail
+
+VERSION="1.0.0"
+PROG="mac-health"
+
+export LC_ALL=C  # forza punto decimale, indipendente dalla locale
+
+# ─────────────────────────────────────────────────────────────
+# Opzioni / flag
+# ─────────────────────────────────────────────────────────────
+USE_COLOR=1
+OUTPUT="text"   # text | json
+
+# Disattiva i colori se l'output non è un terminale (pipe, file, CI)
+[ -t 1 ] || USE_COLOR=0
+
+print_help() {
+  cat <<EOF
+${PROG} v${VERSION} — check rapido delle prestazioni del Mac
+
+USO:
+  ${PROG} [opzioni]
+
+OPZIONI:
+  -j, --json        Output in formato JSON (per script/automazioni)
+      --no-color    Disabilita i colori
+  -h, --help        Mostra questo aiuto
+  -v, --version     Mostra la versione
+
+EXIT CODES:
+  0  sistema in salute
+  1  sistema sotto carico (warning)
+  2  sistema in pressione critica
+
+ESEMPI:
+  ${PROG}                    # report leggibile a colori
+  ${PROG} --json             # output JSON
+  ${PROG} >> ~/mac-health.log  # salva storico (colori off automatico)
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -j|--json)     OUTPUT="json" ;;
+    --no-color)    USE_COLOR=0 ;;
+    -h|--help)     print_help; exit 0 ;;
+    -v|--version)  echo "${PROG} v${VERSION}"; exit 0 ;;
+    *) echo "Opzione sconosciuta: $1" >&2; echo "Usa '${PROG} --help'." >&2; exit 64 ;;
+  esac
+  shift
+done
+
+# ─────────────────────────────────────────────────────────────
+# Colori (attivi solo se USE_COLOR=1)
+# ─────────────────────────────────────────────────────────────
+if [ "$USE_COLOR" -eq 1 ]; then
+  RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[1;33m'
+  BLU=$'\033[1;34m'; BLD=$'\033[1m'; NC=$'\033[0m'
+else
+  RED=; GRN=; YEL=; BLU=; BLD=; NC=
+fi
+
+hr() { printf "%s%s%s\n" "$BLU" "────────────────────────────────────────────" "$NC"; }
+
+# ─────────────────────────────────────────────────────────────
+# Raccolta dati (una sola volta ciascuno)
+# ─────────────────────────────────────────────────────────────
+HW=$(system_profiler SPHardwareDataType 2>/dev/null || true)
+MODEL=$(printf '%s\n' "$HW" | awk -F': ' '/Model Name/{print $2; exit}')
+CHIP=$(printf '%s\n' "$HW" | awk -F': ' '/Chip|Processor Name/{print $2; exit}')
+[ -z "$MODEL" ] && MODEL="Mac"
+[ -z "$CHIP" ] && CHIP="CPU sconosciuta"
+
+RAM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
+CORES=$(sysctl -n hw.ncpu)
+LOAD=$(sysctl -n vm.loadavg | awk '{print $2}')
+UP=$(uptime | sed -E 's/.*up ([^,]*(, [0-9]+ [a-z]+)?),.*/\1/')
+
+FREE_PCT=$(memory_pressure 2>/dev/null | awk -F': ' '/percentage/{gsub(/%/,"",$2); print $2+0; exit}')
+[ -z "$FREE_PCT" ] && FREE_PCT=-1
+
+VMSTAT=$(vm_stat)
+PGSIZE=$(printf '%s\n' "$VMSTAT" | awk 'NR==1{match($0,/[0-9]+/); print substr($0,RSTART,RLENGTH); exit}')
+COMP_GB=$(printf '%s\n' "$VMSTAT" | awk -v pg="$PGSIZE" '/occupied by compressor/{gsub(/\./,"",$5); printf "%.1f", $5*pg/1073741824}')
+[ -z "$COMP_GB" ] && COMP_GB="0.0"
+
+SWAP_GB=$(sysctl -n vm.swapusage | awk '{for(i=1;i<=NF;i++) if($i=="used"){v=$(i+2); gsub(/[^0-9.,]/,"",v); gsub(/,/,".",v); printf "%.1f", v/1024; exit}}')
+[ -z "$SWAP_GB" ] && SWAP_GB="0.0"
+
+read -r DISK_FREE DISK_USED < <(df -h / | awk 'NR==2{print $4, $5}')
+
+# Livelli di stato
+MEM_LEVEL=$(awk -v f="$FREE_PCT" 'BEGIN{ if(f<0)print "na"; else if(f>=40)print "ok"; else if(f>=20)print "warn"; else print "high" }')
+SWAP_LEVEL=$(awk -v s="$SWAP_GB" 'BEGIN{ if(s<2)print "ok"; else if(s<6)print "warn"; else print "high" }')
+
+# Verdetto complessivo → exit code
+VERDICT=$(awk -v s="$SWAP_GB" -v f="$FREE_PCT" 'BEGIN{
+  if ((s>=6) || (f>=0 && f<20)) print "red";
+  else if ((s>=2) || (f>=0 && f<40)) print "yellow";
+  else print "green";
+}')
+
+# ─────────────────────────────────────────────────────────────
+# Top processi (funzioni riusabili)
+# ─────────────────────────────────────────────────────────────
+top_cpu() {
+  ps -Ao pcpu,comm -r | awk 'NR>1 && NR<=6{n=$2; split(n,a,"/"); print $1, a[length(a)]}'
+}
+
+top_ram() {
+  ps -Ao rss,comm | awk '
+  NR>1 {
+    rss=$1; $1=""; sub(/^ /,""); path=$0
+    if (index(path, ".app/") > 0) {
+      tmp=path; sub(/\.app\/.*$/,"",tmp); sub(/^.*\//,"",tmp); key=tmp
+    } else { split(path,a,"/"); key=a[length(a)] }
+    s[key]+=rss; c[key]++
+  }
+  END { for (k in s) printf "%.0f\t%d\t%s\n", s[k]/1024, c[k], k }
+  ' | sort -rn | head -6
+}
+
+# ─────────────────────────────────────────────────────────────
+# Output JSON
+# ─────────────────────────────────────────────────────────────
+if [ "$OUTPUT" = "json" ]; then
+  cpu_json=$(top_cpu | awk 'BEGIN{first=1; printf "["} {if(!first)printf ","; first=0; printf "{\"cpu\":%s,\"name\":\"%s\"}",$1,$2} END{printf "]"}')
+  ram_json=$(top_ram | awk -F'\t' 'BEGIN{first=1; printf "["} {if(!first)printf ","; first=0; printf "{\"mb\":%s,\"procs\":%s,\"name\":\"%s\"}",$1,$2,$3} END{printf "]"}')
+  cat <<EOF
+{
+  "version": "${VERSION}",
+  "model": "${MODEL}",
+  "chip": "${CHIP}",
+  "ram_gb": ${RAM_GB},
+  "cores": ${CORES},
+  "load": ${LOAD},
+  "memory_free_pct": ${FREE_PCT},
+  "memory_compressed_gb": ${COMP_GB},
+  "swap_used_gb": ${SWAP_GB},
+  "disk_free": "${DISK_FREE}",
+  "disk_used_pct": "${DISK_USED}",
+  "verdict": "${VERDICT}",
+  "top_cpu": ${cpu_json},
+  "top_ram": ${ram_json}
+}
+EOF
+else
+  # ── Output testuale ──
+  echo ""
+  printf "%s  MAC HEALTH CHECK  —  %s%s\n" "$BLD" "$(date '+%d/%m/%Y %H:%M')" "$NC"
+  hr
+  printf "%sMacchina:%s %s | %s | %s%s GB RAM%s\n" "$BLD" "$NC" "$MODEL" "$CHIP" "$BLD" "$RAM_GB" "$NC"
+  printf "%sAcceso da:%s %s\n" "$BLD" "$NC" "$UP"
+  printf "%sCarico CPU:%s %s su %s core\n" "$BLD" "$NC" "$LOAD" "$CORES"
+  hr
+
+  printf "%sMemoria libera:%s " "$BLD" "$NC"
+  case "$MEM_LEVEL" in
+    na)   printf "n/d\n" ;;
+    ok)   printf "%s%s%%  (buono)%s\n" "$GRN" "$FREE_PCT" "$NC" ;;
+    warn) printf "%s%s%%  (sotto pressione)%s\n" "$YEL" "$FREE_PCT" "$NC" ;;
+    high) printf "%s%s%%  (critico)%s\n" "$RED" "$FREE_PCT" "$NC" ;;
+  esac
+  printf "%sMemoria compressa:%s %s GB\n" "$BLD" "$NC" "$COMP_GB"
+
+  printf "%sSwap usato:%s " "$BLD" "$NC"
+  case "$SWAP_LEVEL" in
+    ok)   printf "%s%s GB  (ok)%s\n" "$GRN" "$SWAP_GB" "$NC" ;;
+    warn) printf "%s%s GB  (attenzione)%s\n" "$YEL" "$SWAP_GB" "$NC" ;;
+    high) printf "%s%s GB  (alto → causa lentezza)%s\n" "$RED" "$SWAP_GB" "$NC" ;;
+  esac
+  hr
+
+  printf "%sTop 5 processi per CPU:%s\n" "$BLD" "$NC"
+  top_cpu | awk '{printf "  %5s%%  %s\n",$1,$2}'
+  hr
+
+  printf "%sTop 6 app per RAM:%s\n" "$BLD" "$NC"
+  top_ram | awk -F'\t' '{printf "  %6s MB  (%2s proc)  %s\n",$1,$2,$3}'
+  hr
+
+  printf "%sDisco libero:%s %s  (usato %s)\n" "$BLD" "$NC" "$DISK_FREE" "$DISK_USED"
+  hr
+
+  printf "%sVerdetto:%s " "$BLD" "$NC"
+  case "$VERDICT" in
+    red)    printf "%sRAM sotto forte pressione. Chiudi app pesanti (browser!) o riavvia.%s\n" "$RED" "$NC" ;;
+    yellow) printf "%sSituazione gestibile ma sotto carico. Occhio ai browser.%s\n" "$YEL" "$NC" ;;
+    green)  printf "%sSistema in salute.%s\n" "$GRN" "$NC" ;;
+  esac
+  echo ""
+fi
+
+# ─────────────────────────────────────────────────────────────
+# Exit code in base al verdetto
+# ─────────────────────────────────────────────────────────────
+case "$VERDICT" in
+  red)    exit 2 ;;
+  yellow) exit 1 ;;
+  *)      exit 0 ;;
+esac
