@@ -28,9 +28,14 @@ brew install mac-health
 
 ### Manuale
 
+Installa in `~/bin` (funziona sia su Intel che Apple Silicon):
+
 ```sh
-curl -o /usr/local/bin/mac-health https://raw.githubusercontent.com/DemPago/mac-health/main/bin/mac-health
-chmod +x /usr/local/bin/mac-health
+mkdir -p ~/bin
+curl -fsSL https://raw.githubusercontent.com/DemPago/mac-health/main/bin/mac-health -o ~/bin/mac-health
+chmod +x ~/bin/mac-health
+# assicurati che ~/bin sia nel PATH:
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 ```
 
 ## Uso
