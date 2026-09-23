@@ -4,31 +4,7 @@ Un check rapido e leggibile delle prestazioni del tuo Mac: RAM, swap, CPU e disc
 
 Pensato per sviluppatori che si ritrovano il Mac lento e vogliono capire **in 2 secondi** cosa sta succedendo — e magari avere dati oggettivi da mostrare a chi assegna l'hardware.
 
-```
-  MAC HEALTH CHECK  —  23/09/2026 23:41
-────────────────────────────────────────────
-Macchina: MacBook Air | Apple M3 | 16 GB RAM
-Acceso da: 1 day
-Carico CPU: 2.57 su 8 core
-────────────────────────────────────────────
-Memoria libera: 40%  (buono)
-Memoria compressa: 6.5 GB
-Swap usato: 8.0 GB  (alto → causa lentezza)
-────────────────────────────────────────────
-Top 5 processi per CPU:
-   58.4%  opencode
-   19.7%  WindowServer
-   ...
-────────────────────────────────────────────
-Top 6 app per RAM:
-    5176 MB  (66 proc)  Google Chrome
-     936 MB  ( 1 proc)  opencode
-   ...
-────────────────────────────────────────────
-Disco libero: 40Gi  (usato 23%)
-────────────────────────────────────────────
-Verdetto: RAM sotto forte pressione. Chiudi app pesanti (browser!) o riavvia.
-```
+![demo](demo.gif)
 
 ## Caratteristiche
 
@@ -46,6 +22,7 @@ Verdetto: RAM sotto forte pressione. Chiudi app pesanti (browser!) o riavvia.
 
 ```sh
 brew tap dempago/tap
+brew trust dempago/tap   # richiesto da Homebrew per i tap di terze parti
 brew install mac-health
 ```
 
@@ -99,6 +76,16 @@ Lo swap significa che il Mac usa il disco (lento) come RAM di emergenza. Rimedi:
 ## Requisiti
 
 macOS (qualsiasi versione recente, Intel o Apple Silicon). Nessun'altra dipendenza.
+
+## Sviluppo
+
+Per rigenerare la GIF demo (richiede `asciinema` e `agg`):
+
+```sh
+brew install asciinema agg
+asciinema rec -c "mac-health" --overwrite demo.cast
+agg --theme dracula --font-size 20 demo.cast demo.gif
+```
 
 ## Licenza
 
