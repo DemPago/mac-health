@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="1.5.4"
+VERSION=$(git -C "$(dirname "${BASH_SOURCE[0]}")" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "dev")
 PROG="mac-health"
 
 export LC_ALL=C  # forza punto decimale, indipendente dalla locale
