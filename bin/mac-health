@@ -81,6 +81,7 @@ while [ $# -gt 0 ]; do
     --no-clear)    CLEAR_SCREEN=0 ;;
     -w|--watch)
       [ $# -gt 1 ] || { echo "Opzione $1 richiede un argomento." >&2; exit 64; }
+      [[ "$2" =~ ^[0-9]+$ ]] && [ "$2" -ge 1 ] || { echo "--watch richiede un numero intero positivo (es. --watch 5)." >&2; exit 64; }
       WATCH_INTERVAL="$2"; shift ;;
     -o|--out)
       [ $# -gt 1 ] || { echo "Opzione $1 richiede un argomento." >&2; exit 64; }
