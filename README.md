@@ -4,7 +4,7 @@ Un check rapido e leggibile delle prestazioni del tuo Mac: RAM, swap, CPU e disc
 
 Pensato per sviluppatori che si ritrovano il Mac lento e vogliono capire **in 2 secondi** cosa sta succedendo — e magari avere dati oggettivi da mostrare a chi assegna l'hardware.
 
-![demo](demo.gif)
+![demo](https://github.com/DemPago/mac-health/releases/download/v1.1.0/demo.gif)
 
 ## Caratteristiche
 
