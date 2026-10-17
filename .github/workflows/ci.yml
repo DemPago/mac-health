@@ -22,17 +22,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Output testuale
-        run: bin/mac-health --fast --no-color
+      - name: Output testuale (exit code 0-2)
+        run: |
+          bin/mac-health --fast --no-color; code=$?
+          [[ $code -le 2 ]]
 
       - name: JSON valido
-        run: bin/mac-health --fast --json | python3 -m json.tool > /dev/null
+        run: |
+          bin/mac-health --fast --json; code=$?
+          [[ $code -le 2 ]]
+          bin/mac-health --fast --json | python3 -m json.tool > /dev/null
 
       - name: Quiet — nessun output, exit code 0-2
         run: |
-          bin/mac-health --fast --quiet
-          code=$?
-          [[ $code -ge 0 && $code -le 2 ]]
+          bin/mac-health --fast --quiet; code=$?
+          [[ $code -le 2 ]]
 
       - name: Opzione sconosciuta → exit 64
         run: |
