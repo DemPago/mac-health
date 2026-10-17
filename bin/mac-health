@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 PROG="mac-health"
 
 export LC_ALL=C  # forza punto decimale, indipendente dalla locale
@@ -26,11 +26,12 @@ USE_COLOR=1
 OUTPUT="text"   # text | json
 FAST_MODE=0     # --fast: salta system_profiler (più veloce)
 QUIET=0         # --quiet: nessun output, solo exit code
-CLEAR_SCREEN=0  # --clear: pulisce schermo prima del report
+CLEAR_SCREEN=0  # default: 1 in terminale reale, 0 in pipe/CI/--no-clear
 OUT_FILE=""     # --out FILE: salva report no-color su file (scripting)
 
-# Disattiva i colori se l'output non è un terminale (pipe, file, CI)
+# Disattiva colori e clear screen se l'output non è un terminale
 [ -t 1 ] || USE_COLOR=0
+[ -t 1 ] && CLEAR_SCREEN=1 || CLEAR_SCREEN=0
 
 print_help() {
   cat <<EOF
@@ -43,7 +44,7 @@ OPZIONI:
   -j, --json        Output in formato JSON (per script/automazioni)
       --no-color    Disabilita i colori
       --fast        Salta system_profiler (avvio più rapido, modello/chip non mostrati)
-      --clear       Pulisce lo schermo prima di stampare il report
+      --no-clear    Non pulire lo schermo prima del report
   -o, --out FILE    Salva il report su FILE (no colori, silenzioso)
   -q, --quiet       Nessun output: solo exit code (utile in CI/cron)
   -h, --help        Mostra questo aiuto
@@ -75,7 +76,7 @@ while [ $# -gt 0 ]; do
     -j|--json)     OUTPUT="json" ;;
     --no-color)    USE_COLOR=0 ;;
     --fast)        FAST_MODE=1 ;;
-    --clear)       CLEAR_SCREEN=1 ;;
+    --no-clear)    CLEAR_SCREEN=0 ;;
     -o|--out)
       [ $# -gt 1 ] || { echo "Opzione $1 richiede un argomento." >&2; exit 64; }
       OUT_FILE="$2"; shift ;;
