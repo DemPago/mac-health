@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PROG="mac-health"
 
 export LC_ALL=C  # forza punto decimale, indipendente dalla locale
@@ -134,9 +134,11 @@ if [ "$FAST_MODE" -eq 0 ]; then
   HW=$(system_profiler SPHardwareDataType 2>/dev/null || true)
   MODEL=$(printf '%s\n' "$HW" | awk -F': ' '/Model Name/{print $2; exit}')
   CHIP=$(printf '%s\n' "$HW" | awk -F': ' '/Chip|Processor Name/{print $2; exit}')
+  BATT_RAW=$(system_profiler SPPowerDataType 2>/dev/null || true)
 else
   MODEL=""
   CHIP=""
+  BATT_RAW=""
 fi
 [ -z "$MODEL" ] && MODEL="Mac"
 [ -z "$CHIP" ]  && CHIP="CPU sconosciuta"
@@ -169,6 +171,21 @@ SWAP_GB=$(sysctl -n vm.swapusage | awk '{
 }')
 [ -z "$SWAP_GB" ] && SWAP_GB="0.0"
 
+# ── Batteria (vuoto sui desktop — section saltata in output) ──
+BATT_CONDITION=$(printf '%s\n' "$BATT_RAW" | awk -F': ' '/Condition/{gsub(/^[ \t]+/,"",$2); print $2; exit}')
+BATT_CYCLES=$(printf '%s\n' "$BATT_RAW" | awk -F': ' '/Cycle Count/{gsub(/^[ \t]+/,"",$2); print $2+0; exit}')
+BATT_CAPACITY=$(printf '%s\n' "$BATT_RAW" | awk -F': ' '/Maximum Capacity/{gsub(/[^0-9]/,"",$2); print $2+0; exit}')
+
+# ── Stato SMART disco principale ──
+SMART=$(diskutil info disk0 2>/dev/null | awk -F': ' '/SMART Status/{gsub(/^[ \t]+/,"",$2); print $2; exit}' || true)
+[ -z "$SMART" ] && SMART="n/d"
+
+# ── Thermal throttling ──
+THERM_RAW=$(pmset -g therm 2>/dev/null || true)
+THERM_STATE=$(printf '%s\n' "$THERM_RAW" | awk '/System wide thermal state/{print $NF; exit}')
+THERM_SPEED=$(printf '%s\n' "$THERM_RAW" | awk '/CPU_Speed_Limit/{print $NF; exit}')
+[ -z "$THERM_STATE" ] && THERM_STATE="No"
+
 read -r DISK_FREE_KB DISK_USED < <(df -k / | awk 'NR==2{print $4, $5}')
 DISK_FREE=$(awk -v k="$DISK_FREE_KB" 'BEGIN{
   gb = k / 1048576
@@ -182,15 +199,18 @@ MEM_LEVEL=$(awk -v f="$FREE_PCT" -v warn="$MEM_WARN" -v crit="$MEM_CRIT" '
 SWAP_LEVEL=$(awk -v s="$SWAP_GB" -v warn="$SWAP_WARN" -v crit="$SWAP_CRIT" '
   BEGIN{ if(s<warn)print "ok"; else if(s<crit)print "warn"; else print "high" }')
 
+SMART_FAIL=0;    [ "$SMART" = "Failing" ] && SMART_FAIL=1
+THERM_THROTTLE=0; [ "$THERM_STATE" = "Yes" ] && THERM_THROTTLE=1
+
 # Verdetto complessivo → exit code
-# Include load normalizzato: se load/core > LOAD_WARN scatta il warning
 VERDICT=$(awk -v s="$SWAP_GB" -v f="$FREE_PCT" -v l="$LOAD1" -v c="$CORES" \
               -v sw="$SWAP_WARN" -v sc="$SWAP_CRIT" \
               -v mw="$MEM_WARN" -v mc="$MEM_CRIT" \
-              -v lw="$LOAD_WARN" 'BEGIN{
+              -v lw="$LOAD_WARN" \
+              -v sf="$SMART_FAIL" -v tt="$THERM_THROTTLE" 'BEGIN{
   load_norm = (c > 0) ? l/c : 0
-  if ((s>=sc) || (f>=0 && f<mc)) print "red"
-  else if ((s>=sw) || (f>=0 && f<mw) || load_norm > lw) print "yellow"
+  if ((s>=sc) || (f>=0 && f<mc) || sf==1) print "red"
+  else if ((s>=sw) || (f>=0 && f<mw) || load_norm > lw || tt==1) print "yellow"
   else print "green"
 }')
 
@@ -260,6 +280,10 @@ elif [ "$OUTPUT" = "json" ]; then
   "swap_used_gb": ${SWAP_GB},
   "disk_free": ${DISK_FREE_JSON},
   "disk_used_pct": ${DISK_USED_JSON},
+  "smart_status": $(json_str "$SMART"),
+  "thermal_throttle": $([ "$THERM_THROTTLE" -eq 1 ] && echo "true" || echo "false"),
+  "thermal_cpu_speed_pct": $([ -n "$THERM_SPEED" ] && echo "$THERM_SPEED" || echo "null"),
+  "battery": $([ -n "$BATT_CONDITION" ] && printf '{"condition":%s,"cycles":%s,"max_capacity_pct":%s}' "$(json_str "$BATT_CONDITION")" "${BATT_CYCLES:-null}" "${BATT_CAPACITY:-null}" || echo "null"),
   "verdict": "${VERDICT}",
   "top_cpu": ${cpu_json},
   "top_ram": ${ram_json}
@@ -303,6 +327,37 @@ else
   hr
 
   printf "%sDisco libero:%s %s  (usato %s)\n" "$BLD" "$NC" "$DISK_FREE" "$DISK_USED"
+
+  printf "%sSMART disco:%s " "$BLD" "$NC"
+  case "$SMART" in
+    Verified) printf "%sVerified%s\n" "$GRN" "$NC" ;;
+    Failing)  printf "%sFailing — fai subito un backup!%s\n" "$RED" "$NC" ;;
+    *)        printf "%s\n" "$SMART" ;;
+  esac
+
+  printf "%sTermico:%s " "$BLD" "$NC"
+  if [ "$THERM_STATE" = "Yes" ] && [ -n "$THERM_SPEED" ]; then
+    printf "%sThrottling — CPU limitata al %s%%%s\n" "$YEL" "$THERM_SPEED" "$NC"
+  elif [ "$THERM_STATE" = "No" ]; then
+    printf "%sok%s\n" "$GRN" "$NC"
+  else
+    printf "n/d\n"
+  fi
+
+  if [ -n "$BATT_CONDITION" ]; then
+    _batt_col="$GRN"
+    [[ "$BATT_CONDITION" == *"Replace"* ]] && _batt_col="$YEL"
+    [[ "$BATT_CONDITION" == *"Service"* ]] && _batt_col="$RED"
+    printf "%sBatteria:%s %s%s%s" "$BLD" "$NC" "$_batt_col" "$BATT_CONDITION" "$NC"
+    if [ -n "$BATT_CYCLES" ] || [ -n "$BATT_CAPACITY" ]; then
+      printf "  ("
+      [ -n "$BATT_CYCLES" ]   && printf "%s cicli" "$BATT_CYCLES"
+      [ -n "$BATT_CYCLES" ] && [ -n "$BATT_CAPACITY" ] && printf ", "
+      [ -n "$BATT_CAPACITY" ] && printf "capacità %s%%" "$BATT_CAPACITY"
+      printf ")"
+    fi
+    printf "\n"
+  fi
   hr
 
   printf "%sVerdetto:%s " "$BLD" "$NC"
