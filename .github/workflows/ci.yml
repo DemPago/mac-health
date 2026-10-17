@@ -47,5 +47,5 @@ jobs:
 
       - name: Soglie via env var
         run: |
-          MAC_HEALTH_SWAP_WARN=0 MAC_HEALTH_SWAP_CRIT=0 bin/mac-health --fast --quiet
-          [[ $? -ge 1 ]]
+          MAC_HEALTH_SWAP_WARN=0 MAC_HEALTH_SWAP_CRIT=0 bin/mac-health --fast --quiet || code=$?
+          [[ ${code:-0} -ge 1 ]]
