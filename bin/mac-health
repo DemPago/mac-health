@@ -187,8 +187,13 @@ THERM_STATE=$(printf '%s\n' "$THERM_RAW" | awk '/System wide thermal state/{prin
 THERM_SPEED=$(printf '%s\n' "$THERM_RAW" | awk '/CPU_Speed_Limit/{print $NF; exit}')
 [ -z "$THERM_STATE" ] && THERM_STATE="No"
 
-read -r DISK_FREE_KB DISK_USED < <(df -k / | awk 'NR==2{print $4, $5}')
+read -r DISK_TOTAL_KB DISK_FREE_KB DISK_USED < <(df -k / | awk 'NR==2{print $2, $4, $5}')
 DISK_FREE=$(awk -v k="$DISK_FREE_KB" 'BEGIN{
+  gb = k / 1048576
+  if (gb >= 1) printf "%.0f GB", gb
+  else printf "%d MB", int(k/1024)
+}')
+DISK_TOTAL=$(awk -v k="$DISK_TOTAL_KB" 'BEGIN{
   gb = k / 1048576
   if (gb >= 1) printf "%.0f GB", gb
   else printf "%d MB", int(k/1024)
@@ -279,6 +284,7 @@ elif [ "$OUTPUT" = "json" ]; then
   "memory_free_pct": ${FREE_PCT},
   "memory_compressed_gb": ${COMP_GB},
   "swap_used_gb": ${SWAP_GB},
+  "disk_total": $(json_str "$DISK_TOTAL"),
   "disk_free": ${DISK_FREE_JSON},
   "disk_used_pct": ${DISK_USED_JSON},
   "smart_status": $(json_str "$SMART"),
@@ -327,7 +333,7 @@ else
   printf "  %s(valori RSS: le pagine condivise tra processi vengono conteggiate più volte)%s\n" "$BLU" "$NC"
   hr
 
-  printf "%sDisco libero:%s %s  (usato %s)\n" "$BLD" "$NC" "$DISK_FREE" "$DISK_USED"
+  printf "%sDisco:%s %s liberi su %s  (usato %s)\n" "$BLD" "$NC" "$DISK_FREE" "$DISK_TOTAL" "$DISK_USED"
 
   printf "%sSMART disco:%s " "$BLD" "$NC"
   case "$SMART" in
