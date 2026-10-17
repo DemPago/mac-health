@@ -1,5 +1,7 @@
 # mac-health
 
+[![CI](https://github.com/DemPago/mac-health/actions/workflows/ci.yml/badge.svg)](https://github.com/DemPago/mac-health/actions/workflows/ci.yml)
+
 Un check rapido e leggibile delle prestazioni del tuo Mac: RAM, swap, CPU e disco in un colpo d'occhio. Zero dipendenze, un solo comando.
 
 Pensato per sviluppatori che si ritrovano il Mac lento e vogliono capire **in 2 secondi** cosa sta succedendo — e magari avere dati oggettivi da mostrare a chi assegna l'hardware.

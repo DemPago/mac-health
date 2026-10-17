@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crea GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+      - name: Aggiorna Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          URL="https://github.com/DemPago/mac-health/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          SHA256=$(curl -sL "$URL" | sha256sum | awk '{print $1}')
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/DemPago/homebrew-tap.git" tap
+          cd tap
+
+          sed -i "s|url \".*\"|url \"${URL}\"|" Formula/mac-health.rb
+          sed -i "s|sha256 \".*\"|sha256 \"${SHA256}\"|" Formula/mac-health.rb
+
+          git config user.email "github-actions@github.com"
+          git config user.name "github-actions"
+          git add Formula/mac-health.rb
+          git diff --cached --quiet || git commit -m "mac-health ${VERSION}"
+          git push
