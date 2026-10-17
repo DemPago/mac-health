@@ -14,7 +14,8 @@ Pensato per sviluppatori che si ritrovano il Mac lento e vogliono capire **in 2 
 - **Aggregazione intelligente** — somma la RAM di tutti i processi della stessa app (es. i 66 processi di Chrome).
 - **Output JSON** (`--json`) — integrabile in script e automazioni.
 - **Exit codes** — `0` sano, `1` warning, `2` critico. Utile per alert automatici.
-- **shellcheck-clean** — codice validato.
+- **Soglie configurabili** — sovrascrivibili via variabili d'ambiente, senza modificare lo script.
+- **shellcheck-clean** — codice validato. CI su ogni push.
 
 ## Installazione
 
@@ -44,6 +45,8 @@ echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 mac-health              # report leggibile a colori
 mac-health --json       # output JSON
 mac-health --no-color   # senza colori
+mac-health --fast       # salta system_profiler (più veloce, utile in CI)
+mac-health --quiet      # nessun output, solo exit code
 mac-health --help       # aiuto
 ```
 
@@ -55,20 +58,42 @@ I colori si disattivano automaticamente quando l'output non è un terminale, qui
 mac-health >> ~/mac-health.log
 ```
 
-### Usarlo in automazioni (grazie agli exit codes)
+### Usarlo in automazioni
 
 ```sh
-mac-health --json > /dev/null || echo "Attenzione: il Mac è sotto carico"
+# alert se il Mac è sotto carico
+mac-health --fast --quiet || echo "Attenzione: Mac sotto carico (exit $?)"
+
+# parsing JSON
+mac-health --fast --json | jq '.verdict, .swap_used_gb'
+```
+
+### Soglie configurabili
+
+Le soglie di warning/critico sono sovrascrivibili via variabili d'ambiente:
+
+| Variabile | Default | Significato |
+|---|---|---|
+| `MAC_HEALTH_SWAP_WARN` | `2` | GB swap per livello warning |
+| `MAC_HEALTH_SWAP_CRIT` | `6` | GB swap per livello critico |
+| `MAC_HEALTH_MEM_WARN` | `40` | % memoria libera per warning |
+| `MAC_HEALTH_MEM_CRIT` | `20` | % memoria libera per critico |
+| `MAC_HEALTH_LOAD_WARN` | `1.5` | load/core per warning |
+
+```sh
+# abbassa la soglia critica swap a 4 GB
+MAC_HEALTH_SWAP_CRIT=4 mac-health
 ```
 
 ## Come leggere i risultati
 
 | Metrica | Cosa indica |
 |---|---|
-| **Memoria libera** | Percentuale di RAM disponibile. Sotto il 20% = problemi. |
+| **Memoria libera** | Percentuale di RAM disponibile. Sotto il 20% = problemi (configurabile). |
 | **Memoria compressa** | RAM che il sistema comprime per non finire lo spazio: sintomo di saturazione. |
-| **Swap usato** | RAM "parcheggiata" sul disco perché la memoria è finita. È la **causa n.1 della lentezza**. Sopra i 6 GB = critico. |
-| **Top app per RAM** | Quali app pesano di più (spoiler: spesso il browser). |
+| **Swap usato** | RAM "parcheggiata" sul disco perché la memoria è finita. È la **causa n.1 della lentezza**. Sopra i 6 GB = critico (configurabile). |
+| **Carico CPU** | Load average a 1, 5 e 15 minuti normalizzato per core. Sopra 1.5× = warning. |
+| **Top app per RAM** | Quali app pesano di più (spoiler: spesso il browser). I valori sono RSS — le pagine condivise tra processi vengono conteggiate più volte. |
 
 ### E se lo swap è alto?
 

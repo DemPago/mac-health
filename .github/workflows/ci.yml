@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ludeeus/action-shellcheck@2.0.0
+        with:
+          scandir: './bin'
+
+  smoke-test:
+    name: Smoke test (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Output testuale
+        run: bin/mac-health --fast --no-color
+
+      - name: JSON valido
+        run: bin/mac-health --fast --json | python3 -m json.tool > /dev/null
+
+      - name: Quiet — nessun output, exit code 0-2
+        run: |
+          bin/mac-health --fast --quiet
+          code=$?
+          [[ $code -ge 0 && $code -le 2 ]]
+
+      - name: Opzione sconosciuta → exit 64
+        run: |
+          bin/mac-health --opzione-inesistente 2>/dev/null && exit 1 || [[ $? -eq 64 ]]
+
+      - name: Soglie via env var
+        run: |
+          MAC_HEALTH_SWAP_WARN=0 MAC_HEALTH_SWAP_CRIT=0 bin/mac-health --fast --quiet
+          [[ $? -ge 1 ]]

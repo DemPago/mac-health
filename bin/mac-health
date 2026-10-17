@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 PROG="mac-health"
 
 export LC_ALL=C  # forza punto decimale, indipendente dalla locale
@@ -25,6 +25,7 @@ export LC_ALL=C  # forza punto decimale, indipendente dalla locale
 USE_COLOR=1
 OUTPUT="text"   # text | json
 FAST_MODE=0     # --fast: salta system_profiler (più veloce)
+QUIET=0         # --quiet: nessun output, solo exit code
 
 # Disattiva i colori se l'output non è un terminale (pipe, file, CI)
 [ -t 1 ] || USE_COLOR=0
@@ -40,6 +41,7 @@ OPZIONI:
   -j, --json        Output in formato JSON (per script/automazioni)
       --no-color    Disabilita i colori
       --fast        Salta system_profiler (avvio più rapido, modello/chip non mostrati)
+  -q, --quiet       Nessun output: solo exit code (utile in CI/cron)
   -h, --help        Mostra questo aiuto
   -v, --version     Mostra la versione
 
@@ -69,6 +71,7 @@ while [ $# -gt 0 ]; do
     -j|--json)     OUTPUT="json" ;;
     --no-color)    USE_COLOR=0 ;;
     --fast)        FAST_MODE=1 ;;
+    -q|--quiet)    QUIET=1 ;;
     -h|--help)     print_help; exit 0 ;;
     -v|--version)  echo "${PROG} v${VERSION}"; exit 0 ;;
     *) echo "Opzione sconosciuta: $1" >&2; echo "Usa '${PROG} --help'." >&2; exit 64 ;;
@@ -124,7 +127,7 @@ fi
 
 RAM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
 CORES=$(sysctl -n hw.ncpu)
-LOAD=$(sysctl -n vm.loadavg | awk '{print $2}')
+read -r LOAD1 LOAD5 LOAD15 < <(sysctl -n vm.loadavg | awk '{print $2, $3, $4}')
 UP=$(uptime | sed -E 's/.*up ([^,]*(, [0-9]+ [a-z]+)?),.*/\1/')
 
 # Protegge da errori di memory_pressure senza far uscire lo script con set -e
@@ -150,7 +153,12 @@ SWAP_GB=$(sysctl -n vm.swapusage | awk '{
 }')
 [ -z "$SWAP_GB" ] && SWAP_GB="0.0"
 
-read -r DISK_FREE DISK_USED < <(df -h / | awk 'NR==2{print $4, $5}')
+read -r DISK_FREE_KB DISK_USED < <(df -k / | awk 'NR==2{print $4, $5}')
+DISK_FREE=$(awk -v k="$DISK_FREE_KB" 'BEGIN{
+  gb = k / 1048576
+  if (gb >= 1) printf "%.0f GB", gb
+  else printf "%d MB", int(k/1024)
+}')
 
 # Livelli di stato (usa soglie configurabili)
 MEM_LEVEL=$(awk -v f="$FREE_PCT" -v warn="$MEM_WARN" -v crit="$MEM_CRIT" '
@@ -160,7 +168,7 @@ SWAP_LEVEL=$(awk -v s="$SWAP_GB" -v warn="$SWAP_WARN" -v crit="$SWAP_CRIT" '
 
 # Verdetto complessivo → exit code
 # Include load normalizzato: se load/core > LOAD_WARN scatta il warning
-VERDICT=$(awk -v s="$SWAP_GB" -v f="$FREE_PCT" -v l="$LOAD" -v c="$CORES" \
+VERDICT=$(awk -v s="$SWAP_GB" -v f="$FREE_PCT" -v l="$LOAD1" -v c="$CORES" \
               -v sw="$SWAP_WARN" -v sc="$SWAP_CRIT" \
               -v mw="$MEM_WARN" -v mc="$MEM_CRIT" \
               -v lw="$LOAD_WARN" 'BEGIN{
@@ -197,7 +205,9 @@ top_ram() {
 # ─────────────────────────────────────────────────────────────
 # Output JSON
 # ─────────────────────────────────────────────────────────────
-if [ "$OUTPUT" = "json" ]; then
+if [ "$QUIET" -eq 1 ] && [ "$OUTPUT" != "json" ]; then
+  : # nessun output: cade direttamente all'exit code finale
+elif [ "$OUTPUT" = "json" ]; then
   MODEL_JSON=$(json_str "$MODEL")
   CHIP_JSON=$(json_str "$CHIP")
   DISK_FREE_JSON=$(json_str "$DISK_FREE")
@@ -226,7 +236,9 @@ if [ "$OUTPUT" = "json" ]; then
   "chip": ${CHIP_JSON},
   "ram_gb": ${RAM_GB},
   "cores": ${CORES},
-  "load": ${LOAD},
+  "load": ${LOAD1},
+  "load_5m": ${LOAD5},
+  "load_15m": ${LOAD15},
   "memory_free_pct": ${FREE_PCT},
   "memory_compressed_gb": ${COMP_GB},
   "swap_used_gb": ${SWAP_GB},
@@ -244,7 +256,7 @@ else
   hr
   printf "%sMacchina:%s %s | %s | %s%s GB RAM%s\n" "$BLD" "$NC" "$MODEL" "$CHIP" "$BLD" "$RAM_GB" "$NC"
   printf "%sAcceso da:%s %s\n" "$BLD" "$NC" "$UP"
-  printf "%sCarico CPU:%s %s su %s core\n" "$BLD" "$NC" "$LOAD" "$CORES"
+  printf "%sCarico CPU:%s %s / %s / %s  su %s core  (1/5/15 min)\n" "$BLD" "$NC" "$LOAD1" "$LOAD5" "$LOAD15" "$CORES"
   hr
 
   printf "%sMemoria libera:%s " "$BLD" "$NC"
@@ -270,6 +282,7 @@ else
 
   printf "%sTop 6 app per RAM:%s\n" "$BLD" "$NC"
   top_ram | awk -F'\t' '{printf "  %6s MB  (%2s proc)  %s\n",$1,$2,$3}'
+  printf "  %s(valori RSS: le pagine condivise tra processi vengono conteggiate più volte)%s\n" "$BLU" "$NC"
   hr
 
   printf "%sDisco libero:%s %s  (usato %s)\n" "$BLD" "$NC" "$DISK_FREE" "$DISK_USED"
