@@ -345,7 +345,9 @@ else
     printf "n/d\n"
   fi
 
-  if [ -n "$BATT_CONDITION" ]; then
+  if [ "$FAST_MODE" -eq 1 ]; then
+    printf "%sBatteria:%s n/d  (usa mac-health senza --fast)\n" "$BLD" "$NC"
+  elif [ -n "$BATT_CONDITION" ]; then
     _batt_col="$GRN"
     [[ "$BATT_CONDITION" == *"Replace"* ]] && _batt_col="$YEL"
     [[ "$BATT_CONDITION" == *"Service"* ]] && _batt_col="$RED"
