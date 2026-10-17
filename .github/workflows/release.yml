@@ -32,14 +32,6 @@ jobs:
           OUTPUT: CHANGELOG_LATEST.md
           GITHUB_REPO: ${{ github.repository }}
 
-      - name: Committa CHANGELOG
-        run: |
-          git config user.email "github-actions@github.com"
-          git config user.name "github-actions"
-          git add CHANGELOG.md
-          git diff --cached --quiet || git commit -m "chore: aggiorna CHANGELOG per ${GITHUB_REF_NAME}"
-          git push origin HEAD:main
-
       - name: Crea GitHub Release
         uses: softprops/action-gh-release@v2
         with:
