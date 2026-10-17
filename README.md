@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/DemPago/mac-health/actions/workflows/ci.yml/badge.svg)](https://github.com/DemPago/mac-health/actions/workflows/ci.yml)
 
-Un check rapido e leggibile delle prestazioni del tuo Mac: RAM, swap, CPU e disco in un colpo d'occhio. Zero dipendenze, un solo comando.
+Un check rapido e leggibile delle prestazioni del tuo Mac: RAM, swap, CPU, disco, batteria e stato termico in un colpo d'occhio. Zero dipendenze, un solo comando.
 
 Pensato per sviluppatori che si ritrovano il Mac lento e vogliono capire **in 2 secondi** cosa sta succedendo — e magari avere dati oggettivi da mostrare a chi assegna l'hardware.
 
@@ -10,10 +10,14 @@ Pensato per sviluppatori che si ritrovano il Mac lento e vogliono capire **in 2 
 
 ## Caratteristiche
 
-- **Zero dipendenze** — usa solo tool nativi macOS (`awk`, `sysctl`, `vm_stat`, `ps`, `df`, `memory_pressure`). Niente `bc`, niente installazioni.
+- **Zero dipendenze** — usa solo tool nativi macOS (`awk`, `sysctl`, `vm_stat`, `ps`, `df`, `memory_pressure`, `diskutil`, `pmset`). Niente `bc`, niente installazioni.
 - **Intel + Apple Silicon** — rileva automaticamente il chip.
 - **Verdetto automatico** — ti dice a colori se il sistema è sano, sotto carico o critico.
 - **Aggregazione intelligente** — somma la RAM di tutti i processi della stessa app (es. i 66 processi di Chrome).
+- **Batteria** — condizione, cicli e capacità residua (solo MacBook).
+- **SMART disco** — stato del disco principale.
+- **Stato termico** — rileva CPU throttling e percentuale di velocità residua.
+- **Modalità watch** (`--watch N`) — aggiorna il report ogni N secondi, come `top`.
 - **Output JSON** (`--json`) — integrabile in script e automazioni.
 - **Exit codes** — `0` sano, `1` warning, `2` critico. Utile per alert automatici.
 - **Soglie configurabili** — sovrascrivibili via variabili d'ambiente, senza modificare lo script.
@@ -97,6 +101,10 @@ MAC_HEALTH_SWAP_CRIT=4 mac-health
 | **Swap usato** | RAM "parcheggiata" sul disco perché la memoria è finita. È la **causa n.1 della lentezza**. Sopra i 6 GB = critico (configurabile). |
 | **Carico CPU** | Load average a 1, 5 e 15 minuti normalizzato per core. Sopra 1.5× = warning. |
 | **Top app per RAM** | Quali app pesano di più (spoiler: spesso il browser). I valori sono RSS — le pagine condivise tra processi vengono conteggiate più volte. |
+| **Disco** | GB liberi su totale e percentuale usata. |
+| **SMART disco** | `Verified` = disco sano, `Failing` = fai subito un backup. |
+| **Stato termico** | Se la CPU è in throttling, mostra la percentuale di velocità residua. |
+| **Batteria** | Condizione (`Normal`, `Replace Soon`, `Service Battery`), cicli e capacità massima residua. Solo MacBook. |
 
 ### E se lo swap è alto?
 
