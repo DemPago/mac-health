@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 PROG="mac-health"
 
 export LC_ALL=C  # forza punto decimale, indipendente dalla locale
@@ -24,6 +24,7 @@ export LC_ALL=C  # forza punto decimale, indipendente dalla locale
 # ─────────────────────────────────────────────────────────────
 USE_COLOR=1
 OUTPUT="text"   # text | json
+FAST_MODE=0     # --fast: salta system_profiler (più veloce)
 
 # Disattiva i colori se l'output non è un terminale (pipe, file, CI)
 [ -t 1 ] || USE_COLOR=0
@@ -38,8 +39,16 @@ USO:
 OPZIONI:
   -j, --json        Output in formato JSON (per script/automazioni)
       --no-color    Disabilita i colori
+      --fast        Salta system_profiler (avvio più rapido, modello/chip non mostrati)
   -h, --help        Mostra questo aiuto
   -v, --version     Mostra la versione
+
+SOGLIE CONFIGURABILI (variabili d'ambiente):
+  MAC_HEALTH_SWAP_WARN   GB swap per livello warning  (default: 2)
+  MAC_HEALTH_SWAP_CRIT   GB swap per livello critico  (default: 6)
+  MAC_HEALTH_MEM_WARN    % memoria libera per warning (default: 40)
+  MAC_HEALTH_MEM_CRIT    % memoria libera per critico (default: 20)
+  MAC_HEALTH_LOAD_WARN   load/core per warning        (default: 1.5)
 
 EXIT CODES:
   0  sistema in salute
@@ -47,9 +56,11 @@ EXIT CODES:
   2  sistema in pressione critica
 
 ESEMPI:
-  ${PROG}                    # report leggibile a colori
-  ${PROG} --json             # output JSON
-  ${PROG} >> ~/mac-health.log  # salva storico (colori off automatico)
+  ${PROG}                       # report leggibile a colori
+  ${PROG} --json                # output JSON
+  ${PROG} --fast --json         # JSON senza system_profiler
+  ${PROG} >> ~/mac-health.log   # salva storico (colori off automatico)
+  MAC_HEALTH_SWAP_CRIT=4 ${PROG}  # soglia critica swap a 4 GB
 EOF
 }
 
@@ -57,12 +68,22 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -j|--json)     OUTPUT="json" ;;
     --no-color)    USE_COLOR=0 ;;
+    --fast)        FAST_MODE=1 ;;
     -h|--help)     print_help; exit 0 ;;
     -v|--version)  echo "${PROG} v${VERSION}"; exit 0 ;;
     *) echo "Opzione sconosciuta: $1" >&2; echo "Usa '${PROG} --help'." >&2; exit 64 ;;
   esac
   shift
 done
+
+# ─────────────────────────────────────────────────────────────
+# Soglie (sovrascrivibili via env)
+# ─────────────────────────────────────────────────────────────
+SWAP_WARN=${MAC_HEALTH_SWAP_WARN:-2}
+SWAP_CRIT=${MAC_HEALTH_SWAP_CRIT:-6}
+MEM_WARN=${MAC_HEALTH_MEM_WARN:-40}
+MEM_CRIT=${MAC_HEALTH_MEM_CRIT:-20}
+LOAD_WARN=${MAC_HEALTH_LOAD_WARN:-1.5}
 
 # ─────────────────────────────────────────────────────────────
 # Colori (attivi solo se USE_COLOR=1)
@@ -76,21 +97,38 @@ fi
 
 hr() { printf "%s%s%s\n" "$BLU" "────────────────────────────────────────────" "$NC"; }
 
+# Escape per stringhe JSON: \, ", newline, tab
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\r'/\\r}"
+  s="${s//$'\t'/\\t}"
+  printf '"%s"' "$s"
+}
+
 # ─────────────────────────────────────────────────────────────
 # Raccolta dati (una sola volta ciascuno)
 # ─────────────────────────────────────────────────────────────
-HW=$(system_profiler SPHardwareDataType 2>/dev/null || true)
-MODEL=$(printf '%s\n' "$HW" | awk -F': ' '/Model Name/{print $2; exit}')
-CHIP=$(printf '%s\n' "$HW" | awk -F': ' '/Chip|Processor Name/{print $2; exit}')
+if [ "$FAST_MODE" -eq 0 ]; then
+  HW=$(system_profiler SPHardwareDataType 2>/dev/null || true)
+  MODEL=$(printf '%s\n' "$HW" | awk -F': ' '/Model Name/{print $2; exit}')
+  CHIP=$(printf '%s\n' "$HW" | awk -F': ' '/Chip|Processor Name/{print $2; exit}')
+else
+  MODEL=""
+  CHIP=""
+fi
 [ -z "$MODEL" ] && MODEL="Mac"
-[ -z "$CHIP" ] && CHIP="CPU sconosciuta"
+[ -z "$CHIP" ]  && CHIP="CPU sconosciuta"
 
 RAM_GB=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
 CORES=$(sysctl -n hw.ncpu)
 LOAD=$(sysctl -n vm.loadavg | awk '{print $2}')
 UP=$(uptime | sed -E 's/.*up ([^,]*(, [0-9]+ [a-z]+)?),.*/\1/')
 
-FREE_PCT=$(memory_pressure 2>/dev/null | awk -F': ' '/percentage/{gsub(/%/,"",$2); print $2+0; exit}')
+# Protegge da errori di memory_pressure senza far uscire lo script con set -e
+FREE_PCT=$( { memory_pressure 2>/dev/null || true; } | awk -F': ' '/percentage/{gsub(/%/,"",$2); print $2+0; exit}')
 [ -z "$FREE_PCT" ] && FREE_PCT=-1
 
 VMSTAT=$(vm_stat)
@@ -98,27 +136,49 @@ PGSIZE=$(printf '%s\n' "$VMSTAT" | awk 'NR==1{match($0,/[0-9]+/); print substr($
 COMP_GB=$(printf '%s\n' "$VMSTAT" | awk -v pg="$PGSIZE" '/occupied by compressor/{gsub(/\./,"",$5); printf "%.1f", $5*pg/1073741824}')
 [ -z "$COMP_GB" ] && COMP_GB="0.0"
 
-SWAP_GB=$(sysctl -n vm.swapusage | awk '{for(i=1;i<=NF;i++) if($i=="used"){v=$(i+2); gsub(/[^0-9.,]/,"",v); gsub(/,/,".",v); printf "%.1f", v/1024; exit}}')
+# Gestisce unità M/G/K nel campo swap (es. "2158.00M" o "2.16G")
+SWAP_GB=$(sysctl -n vm.swapusage | awk '{
+  for(i=1;i<=NF;i++) if($i=="used"){
+    raw=$(i+2)
+    val=raw; gsub(/[^0-9.]/,"",val)
+    unit=raw; gsub(/[0-9.]/,"",unit)
+    if (unit~/[Gg]/) printf "%.1f", val+0
+    else if (unit~/[Kk]/) printf "%.1f", val/1048576
+    else printf "%.1f", val/1024
+    exit
+  }
+}')
 [ -z "$SWAP_GB" ] && SWAP_GB="0.0"
 
 read -r DISK_FREE DISK_USED < <(df -h / | awk 'NR==2{print $4, $5}')
 
-# Livelli di stato
-MEM_LEVEL=$(awk -v f="$FREE_PCT" 'BEGIN{ if(f<0)print "na"; else if(f>=40)print "ok"; else if(f>=20)print "warn"; else print "high" }')
-SWAP_LEVEL=$(awk -v s="$SWAP_GB" 'BEGIN{ if(s<2)print "ok"; else if(s<6)print "warn"; else print "high" }')
+# Livelli di stato (usa soglie configurabili)
+MEM_LEVEL=$(awk -v f="$FREE_PCT" -v warn="$MEM_WARN" -v crit="$MEM_CRIT" '
+  BEGIN{ if(f<0)print "na"; else if(f>=warn)print "ok"; else if(f>=crit)print "warn"; else print "high" }')
+SWAP_LEVEL=$(awk -v s="$SWAP_GB" -v warn="$SWAP_WARN" -v crit="$SWAP_CRIT" '
+  BEGIN{ if(s<warn)print "ok"; else if(s<crit)print "warn"; else print "high" }')
 
 # Verdetto complessivo → exit code
-VERDICT=$(awk -v s="$SWAP_GB" -v f="$FREE_PCT" 'BEGIN{
-  if ((s>=6) || (f>=0 && f<20)) print "red";
-  else if ((s>=2) || (f>=0 && f<40)) print "yellow";
-  else print "green";
+# Include load normalizzato: se load/core > LOAD_WARN scatta il warning
+VERDICT=$(awk -v s="$SWAP_GB" -v f="$FREE_PCT" -v l="$LOAD" -v c="$CORES" \
+              -v sw="$SWAP_WARN" -v sc="$SWAP_CRIT" \
+              -v mw="$MEM_WARN" -v mc="$MEM_CRIT" \
+              -v lw="$LOAD_WARN" 'BEGIN{
+  load_norm = (c > 0) ? l/c : 0
+  if ((s>=sc) || (f>=0 && f<mc)) print "red"
+  else if ((s>=sw) || (f>=0 && f<mw) || load_norm > lw) print "yellow"
+  else print "green"
 }')
 
 # ─────────────────────────────────────────────────────────────
 # Top processi (funzioni riusabili)
 # ─────────────────────────────────────────────────────────────
 top_cpu() {
-  ps -Ao pcpu,comm -r | awk 'NR>1 && NR<=6{n=$2; split(n,a,"/"); print $1, a[length(a)]}'
+  # $1 = pcpu; resto della riga = nome completo del processo (gestisce spazi)
+  ps -Ao pcpu,comm -r | awk 'NR>1 && NR<=6{
+    cpu=$1; $1=""; sub(/^ /,""); n=$0
+    split(n,a,"/"); print cpu, a[length(a)]
+  }'
 }
 
 top_ram() {
@@ -138,21 +198,40 @@ top_ram() {
 # Output JSON
 # ─────────────────────────────────────────────────────────────
 if [ "$OUTPUT" = "json" ]; then
-  cpu_json=$(top_cpu | awk 'BEGIN{first=1; printf "["} {if(!first)printf ","; first=0; printf "{\"cpu\":%s,\"name\":\"%s\"}",$1,$2} END{printf "]"}')
-  ram_json=$(top_ram | awk -F'\t' 'BEGIN{first=1; printf "["} {if(!first)printf ","; first=0; printf "{\"mb\":%s,\"procs\":%s,\"name\":\"%s\"}",$1,$2,$3} END{printf "]"}')
+  MODEL_JSON=$(json_str "$MODEL")
+  CHIP_JSON=$(json_str "$CHIP")
+  DISK_FREE_JSON=$(json_str "$DISK_FREE")
+  DISK_USED_JSON=$(json_str "$DISK_USED")
+
+  # Nomi completi e escapati in JSON
+  cpu_json=$(top_cpu | awk '
+    function je(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+    BEGIN{first=1; printf "["}
+    { cpu=$1; $1=""; sub(/^ /,""); name=$0
+      if(!first)printf ","; first=0
+      printf "{\"cpu\":%s,\"name\":\"%s\"}",cpu,je(name) }
+    END{printf "]"}')
+
+  ram_json=$(top_ram | awk -F'\t' '
+    function je(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+    BEGIN{first=1; printf "["}
+    { if(!first)printf ","; first=0
+      printf "{\"mb\":%s,\"procs\":%s,\"name\":\"%s\"}",$1,$2,je($3) }
+    END{printf "]"}')
+
   cat <<EOF
 {
   "version": "${VERSION}",
-  "model": "${MODEL}",
-  "chip": "${CHIP}",
+  "model": ${MODEL_JSON},
+  "chip": ${CHIP_JSON},
   "ram_gb": ${RAM_GB},
   "cores": ${CORES},
   "load": ${LOAD},
   "memory_free_pct": ${FREE_PCT},
   "memory_compressed_gb": ${COMP_GB},
   "swap_used_gb": ${SWAP_GB},
-  "disk_free": "${DISK_FREE}",
-  "disk_used_pct": "${DISK_USED}",
+  "disk_free": ${DISK_FREE_JSON},
+  "disk_used_pct": ${DISK_USED_JSON},
   "verdict": "${VERDICT}",
   "top_cpu": ${cpu_json},
   "top_ram": ${ram_json}
@@ -186,7 +265,7 @@ else
   hr
 
   printf "%sTop 5 processi per CPU:%s\n" "$BLD" "$NC"
-  top_cpu | awk '{printf "  %5s%%  %s\n",$1,$2}'
+  top_cpu | awk '{pct=$1; $1=""; sub(/^ /,""); printf "  %5s%%  %s\n",pct,$0}'
   hr
 
   printf "%sTop 6 app per RAM:%s\n" "$BLD" "$NC"
