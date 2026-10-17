@@ -49,6 +49,7 @@ mac-health --json       # output JSON
 mac-health --no-color   # senza colori
 mac-health --fast       # salta system_profiler (più veloce, utile in CI)
 mac-health --quiet      # nessun output, solo exit code
+mac-health --watch 5    # aggiorna ogni 5 secondi (Ctrl+C per uscire)
 mac-health --help       # aiuto
 ```
 
